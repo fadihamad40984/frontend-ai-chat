@@ -1,7 +1,7 @@
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
-@@keyframes slide-in-right {
+@keyframes slide-in-right {
   from {
     transform: translateX(-100%);
     opacity: 0;
