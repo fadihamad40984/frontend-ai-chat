@@ -1,356 +1,335 @@
-import React, { useEffect, useState, useRef } from "react";
-import { supabase } from "../supabaseClient";
+import React, { useState, useRef, useEffect } from "react";
 import {
   FaPaperPlane,
-  FaSignOutAlt,
   FaRobot,
-  FaUserCircle,
-  FaTimes,
+  FaUser,
+  FaTrash,
+  FaGithub,
+  FaCopy,
+  FaCheck,
 } from "react-icons/fa";
-import { useNavigate } from "react-router-dom";
+
+const BACKEND_URL = "https://backend-chatbot-bc8w.onrender.com";
 
 function Chat() {
-  const [messages, setMessages] = useState([]);
+  const [messages, setMessages] = useState([
+    {
+      id: 1,
+      sender: "bot",
+      text: "Hello! I'm your AI assistant powered by semantic search and advanced NLP. Ask me anything!",
+      timestamp: new Date(),
+    },
+  ]);
   const [input, setInput] = useState("");
   const [typing, setTyping] = useState(false);
-  const [user, setUser] = useState(null);
-  const [profileOpen, setProfileOpen] = useState(false);
-  const [message, setMessage] = useState("");
+  const [copiedId, setCopiedId] = useState(null);
   const messagesEndRef = useRef(null);
-  const navigate = useNavigate();
 
-  // Scroll to last message
+  // Auto-scroll to bottom
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages, typing]);
 
-  // Load user & messages
-  useEffect(() => {
-    const loadUserAndMessages = async () => {
-      const { data: userData, error: userError } =
-        await supabase.auth.getUser();
-      if (userError || !userData?.user) {
-        navigate("/signin");
-        return;
-      }
-
-      const currentUser = userData.user;
-      setUser(currentUser);
-
-      const { data: msgs, error: msgError } = await supabase
-        .from("messages")
-        .select("*")
-        .eq("user_id", currentUser.id)
-        .order("created_at", { ascending: true });
-
-      if (msgError) console.error("Message load error:", msgError);
-      setMessages(msgs || []);
-
-      // Realtime updates
-      const channel = supabase
-        .channel("messages-channel")
-        .on(
-          "postgres_changes",
-          { event: "*", schema: "public", table: "messages" },
-          (payload) => {
-            if (payload.new.user_id === currentUser.id) {
-              setMessages((prev) => [...prev, payload.new]);
-            }
-          }
-        )
-        .subscribe();
-
-      return () => supabase.removeChannel(channel);
-    };
-
-    loadUserAndMessages();
-  }, [navigate]);
-
   // Send message
   const handleSend = async (e) => {
     e.preventDefault();
-    if (!input.trim() || !user) return;
+    if (!input.trim()) return;
 
-    const text = input.trim();
-    setMessages((prev) => [
-      ...prev,
-      { id: Date.now(), user_id: user.id, sender: "user", text },
-    ]);
+    const userMessage = {
+      id: Date.now(),
+      sender: "user",
+      text: input.trim(),
+      timestamp: new Date(),
+    };
+
+    setMessages((prev) => [...prev, userMessage]);
     setInput("");
-
-    await supabase
-      .from("messages")
-      .insert([{ user_id: user.id, sender: "user", text }]);
     setTyping(true);
 
     try {
-      const response = await fetch(`${import.meta.env.VITE_API_URL}/chat`, {
+      const response = await fetch(`${BACKEND_URL}/chat`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ message: text }),
+        body: JSON.stringify({ message: userMessage.text }),
       });
 
       const data = await response.json();
-      const botText = data.reply || "I'm still learning 🤖";
-
-      // Transform bot response to array if it has multiple lines
-      let botLines = [];
-      if (typeof botText === "string") {
-        botLines = botText
-          .split(/\n|\r\n/)
-          .filter((line) => line.trim() !== "");
-        if (botLines.length === 0) botLines = [botText];
-      } else if (Array.isArray(botText)) {
-        botLines = botText;
-      } else {
-        botLines = [String(botText)];
-      }
+      const botText = data.response || data.reply || "I couldn't process that request.";
 
       setTyping(false);
-      setMessages((prev) => [
-        ...prev,
-        { id: Date.now() + 1, user_id: user.id, sender: "bot", text: botLines },
-      ]);
 
-      await supabase
-        .from("messages")
-        .insert([{ user_id: user.id, sender: "bot", text: botLines }]);
+      const botMessage = {
+        id: Date.now() + 1,
+        sender: "bot",
+        text: botText,
+        sources: data.sources || [],
+        confidence: data.confidence,
+        timestamp: new Date(),
+      };
+
+      setMessages((prev) => [...prev, botMessage]);
     } catch (err) {
-      console.error("Bot error:", err);
+      console.error("Error:", err);
       setTyping(false);
+      
+      const errorMessage = {
+        id: Date.now() + 1,
+        sender: "bot",
+        text: "Sorry, I'm having trouble connecting to the server. Please try again.",
+        timestamp: new Date(),
+      };
+      
+      setMessages((prev) => [...prev, errorMessage]);
     }
   };
 
-  // Logout
-  const handleLogout = async () => {
-    await supabase.auth.signOut();
-    navigate("/signin");
+  // Clear chat
+  const handleClear = () => {
+    if (window.confirm("Are you sure you want to clear all messages?")) {
+      setMessages([
+        {
+          id: 1,
+          sender: "bot",
+          text: "Chat cleared! How can I help you?",
+          timestamp: new Date(),
+        },
+      ]);
+    }
   };
 
-  // Delete messages
-  const deleteMessages = async (period) => {
-    setMessage("Processing...");
+  // Copy message
+  const handleCopy = (text, id) => {
+    navigator.clipboard.writeText(text);
+    setCopiedId(id);
+    setTimeout(() => setCopiedId(null), 2000);
+  };
 
-    if (!user) return;
-
-    const now = new Date();
-
-    let threshold;
-    if (period === "hour") {
-      threshold = new Date(now.getTime() - 60 * 60 * 1000); // ساعة
-    } else if (period === "day") {
-      threshold = new Date(now.getTime() - 24 * 60 * 60 * 1000); // يوم
-    } else if (period === "week") {
-      threshold = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000); // أسبوع
-    }
-
-    let query = supabase.from("messages").delete().eq("user_id", user.id);
-
-    if (period !== "all") {
-      query = query.lt("created_at", threshold.toISOString()); // تحويل UTC
-    }
-
-    const { error } = await query;
-
-    if (error) {
-      setMessage("❌ Error deleting messages: " + error.message);
-    } else {
-      setMessage("✅ Messages deleted successfully!");
-
-      if (period === "all") {
-        setMessages([]);
-      } else {
-        setMessages((prev) =>
-          prev.filter((msg) => new Date(msg.created_at) >= (threshold || 0))
+  // Format message text with markdown-like formatting
+  const formatMessage = (text) => {
+    if (typeof text !== "string") return text;
+    
+    // Split by newlines and create paragraphs
+    const lines = text.split("\n").filter((line) => line.trim());
+    
+    return lines.map((line, idx) => {
+      // Check for bullet points
+      if (line.trim().startsWith("-") || line.trim().startsWith("•")) {
+        return (
+          <li key={idx} className="ml-4">
+            {line.replace(/^[-•]\s*/, "")}
+          </li>
         );
       }
-    }
-  };
-
-  // Render a message (supports array as list)
-  const renderMessage = (msg) => {
-    if (Array.isArray(msg.text)) {
+      
+      // Check for numbered lists
+      if (/^\d+\./.test(line.trim())) {
+        return (
+          <li key={idx} className="ml-4">
+            {line.replace(/^\d+\.\s*/, "")}
+          </li>
+        );
+      }
+      
+      // Regular paragraph
       return (
-        <ul className="list-disc list-inside space-y-1">
-          {msg.text.map((line, idx) => (
-            <li key={idx}>{line}</li>
-          ))}
-        </ul>
+        <p key={idx} className="mb-2">
+          {line}
+        </p>
       );
-    } else {
-      return <p>{msg.text}</p>;
-    }
+    });
   };
 
   return (
-    <div className="relative flex flex-col min-h-screen bg-gradient-to-br from-gray-900 via-purple-900 to-black text-white overflow-hidden">
+    <div className="flex flex-col h-screen bg-gradient-to-br from-slate-900 via-purple-900 to-slate-900">
       {/* Header */}
-      <header className="flex items-center justify-between p-4 bg-black/40 backdrop-blur-md border-b border-gray-800 z-20">
-        <div className="flex items-center gap-2">
-          <FaRobot className="text-2xl text-purple-400" />
-          <h1 className="text-xl font-bold">BotSpoof Chat</h1>
-        </div>
-
-        <button
-          onClick={handleLogout}
-          className="flex items-center gap-2 bg-purple-600 hover:bg-purple-700 px-4 py-2 rounded-lg font-semibold text-sm transition-all"
-        >
-          <FaSignOutAlt /> Logout
-        </button>
-      </header>
-
-      {/* Chat Messages */}
-      <main className="flex-1 overflow-y-auto px-4 py-6 space-y-3 relative z-10">
-        {messages.length === 0 && !typing ? (
-          <p className="text-center text-gray-400">Start the conversation 👇</p>
-        ) : (
-          <>
-            {messages.map((msg) => (
-              <div
-                key={msg.id}
-                className={`flex ${
-                  msg.sender === "user" ? "justify-end" : "justify-start"
-                }`}
-              >
-                <div
-                  className={`max-w-[70%] px-4 py-2 rounded-2xl text-sm shadow-md ${
-                    msg.sender === "user"
-                      ? "bg-purple-600 text-white rounded-br-none"
-                      : "bg-gray-800 text-gray-100 rounded-bl-none"
-                  }`}
-                >
-                  <div className="flex items-center gap-2 mb-1 text-xs text-gray-300">
-                    {msg.sender === "user" ? <FaUserCircle /> : <FaRobot />}
-                    <span className="capitalize">{msg.sender}</span>
-                  </div>
-                  {renderMessage(msg)}
-                </div>
-              </div>
-            ))}
-
-            {typing && (
-              <div className="flex justify-start">
-                <div className="bg-gray-700 text-gray-200 px-4 py-2 rounded-2xl text-sm animate-pulse">
-                  Bot is typing...
-                </div>
-              </div>
-            )}
-            <div ref={messagesEndRef}></div>
-          </>
-        )}
-      </main>
-
-      {/* Footer */}
-      <footer className="p-4 border-t border-gray-700 bg-black/40 backdrop-blur-md flex items-center justify-between">
-        <button
-          onClick={() => setProfileOpen(!profileOpen)}
-          className="bg-gray-800 hover:bg-gray-700 p-3 rounded-full transition-all hover:scale-110 mr-3"
-          title="View Profile"
-        >
-          <FaUserCircle size={32} className="text-purple-400" />
-        </button>
-
-        <form
-          onSubmit={handleSend}
-          className="flex items-center bg-gray-800 rounded-full px-4 py-2 shadow-lg flex-1"
-        >
-          <input
-            type="text"
-            placeholder="Type your message..."
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            className="flex-1 bg-transparent outline-none text-white placeholder-gray-400 px-2"
-          />
-          <button
-            type="submit"
-            className="bg-purple-600 hover:bg-purple-700 px-4 py-2 rounded-full text-white font-bold transition-transform hover:scale-105"
-          >
-            <FaPaperPlane />
-          </button>
-        </form>
-      </footer>
-
-      {/* Profile Sidebar */}
-      <div
-        className={`fixed inset-0 z-30 bg-black/50 backdrop-blur-sm transition-opacity duration-300 ${
-          profileOpen ? "opacity-100 visible" : "opacity-0 invisible"
-        }`}
-        onClick={() => setProfileOpen(false)}
-      >
-        <div
-          className={`absolute left-0 top-0 h-full w-[370px] bg-gray-900/95 border-r border-gray-800 shadow-2xl p-6 rounded-r-2xl overflow-y-auto transform transition-transform duration-300 ${
-            profileOpen ? "translate-x-0" : "-translate-x-full"
-          }`}
-          onClick={(e) => e.stopPropagation()}
-        >
-          <button
-            onClick={() => setProfileOpen(false)}
-            className="absolute top-4 right-4 text-gray-400 hover:text-white transition"
-          >
-            <FaTimes size={20} />
-          </button>
-
-          <div className="mt-10">
-            <h2 className="text-2xl font-bold text-purple-400 mb-4 border-b border-gray-700 pb-2">
-              Profile
-            </h2>
-
-            <div className="flex flex-col gap-4 text-gray-200">
-              {/* User Information */}
-              <div>
-                <span className="font-semibold">Full Name:</span>{" "}
-                {user?.user_metadata?.full_name || "Not provided"}
-              </div>
-
-              <div>
-                <span className="font-semibold">Email:</span> {user?.email}
-              </div>
-              <div>
-                <span className="font-semibold">Joined:</span>{" "}
-                {new Date(user?.created_at).toLocaleString()}
-              </div>
-
-              {/* Delete Messages */}
-              <div className="flex flex-col gap-4 mt-6">
-                <span className="text-gray-300 font-semibold text-sm uppercase tracking-wide">
-                  🧹 Delete Messages
-                </span>
-                <div className="grid grid-cols-2 gap-3 sm:grid-cols-1">
-                  <button
-                    onClick={() => deleteMessages("hour")}
-                    className="bg-gradient-to-r from-red-500 to-red-600 hover:from-red-600 hover:to-red-700 text-white py-2 px-5 rounded-xl shadow-md transition-all transform hover:scale-105"
-                  >
-                    Last Hour
-                  </button>
-                  <button
-                    onClick={() => deleteMessages("day")}
-                    className="bg-gradient-to-r from-red-500 to-red-600 hover:from-red-600 hover:to-red-700 text-white py-2 px-5 rounded-xl shadow-md transition-all transform hover:scale-105"
-                  >
-                    Last Day
-                  </button>
-                  <button
-                    onClick={() => deleteMessages("week")}
-                    className="bg-gradient-to-r from-red-500 to-red-600 hover:from-red-600 hover:to-red-700 text-white py-2 px-5 rounded-xl shadow-md transition-all transform hover:scale-105"
-                  >
-                    Last Week
-                  </button>
-                  <button
-                    onClick={() => deleteMessages("all")}
-                    className="bg-gradient-to-r from-red-500 to-red-600 hover:from-red-600 hover:to-red-700 text-white py-2 px-5 rounded-xl shadow-md transition-all transform hover:scale-105"
-                  >
-                    All Messages
-                  </button>
-                </div>
-                {message && (
-                  <p className="mt-3 text-sm text-green-400 font-medium text-center animate-pulse">
-                    {message}
-                  </p>
-                )}
-              </div>
+      <header className="bg-black/30 backdrop-blur-xl border-b border-purple-500/20 shadow-lg">
+        <div className="max-w-6xl mx-auto px-4 py-4 flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <div className="relative">
+              <FaRobot className="text-4xl text-purple-400" />
+              <div className="absolute -bottom-1 -right-1 w-3 h-3 bg-green-400 rounded-full border-2 border-slate-900 animate-pulse"></div>
+            </div>
+            <div>
+              <h1 className="text-2xl font-bold text-white">AI Assistant</h1>
+              <p className="text-xs text-purple-300">Powered by Semantic Search & NLP</p>
             </div>
           </div>
+
+          <div className="flex items-center gap-3">
+            <button
+              onClick={handleClear}
+              className="flex items-center gap-2 px-4 py-2 bg-red-500/20 hover:bg-red-500/30 text-red-300 rounded-lg transition-all hover:scale-105 border border-red-500/30"
+              title="Clear chat"
+            >
+              <FaTrash className="text-sm" />
+              <span className="hidden sm:inline">Clear</span>
+            </button>
+
+            <a
+              href="https://github.com/fadihamad40984/backend-chatbot"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="flex items-center gap-2 px-4 py-2 bg-purple-500/20 hover:bg-purple-500/30 text-purple-300 rounded-lg transition-all hover:scale-105 border border-purple-500/30"
+            >
+              <FaGithub className="text-lg" />
+              <span className="hidden sm:inline">GitHub</span>
+            </a>
+          </div>
         </div>
-      </div>
+      </header>
+
+      {/* Messages Container */}
+      <main className="flex-1 overflow-y-auto px-4 py-6">
+        <div className="max-w-4xl mx-auto space-y-6">
+          {messages.map((msg) => (
+            <div
+              key={msg.id}
+              className={`flex gap-3 ${
+                msg.sender === "user" ? "flex-row-reverse" : "flex-row"
+              }`}
+            >
+              {/* Avatar */}
+              <div
+                className={`flex-shrink-0 w-10 h-10 rounded-full flex items-center justify-center ${
+                  msg.sender === "user"
+                    ? "bg-gradient-to-br from-purple-500 to-pink-500"
+                    : "bg-gradient-to-br from-blue-500 to-cyan-500"
+                }`}
+              >
+                {msg.sender === "user" ? (
+                  <FaUser className="text-white text-sm" />
+                ) : (
+                  <FaRobot className="text-white text-sm" />
+                )}
+              </div>
+
+              {/* Message Bubble */}
+              <div
+                className={`group relative max-w-[75%] ${
+                  msg.sender === "user" ? "items-end" : "items-start"
+                } flex flex-col gap-1`}
+              >
+                <div
+                  className={`relative px-5 py-3 rounded-2xl shadow-lg ${
+                    msg.sender === "user"
+                      ? "bg-gradient-to-br from-purple-600 to-purple-700 text-white rounded-tr-sm"
+                      : "bg-gradient-to-br from-slate-800 to-slate-900 text-gray-100 border border-purple-500/20 rounded-tl-sm"
+                  }`}
+                >
+                  <div className="prose prose-invert prose-sm max-w-none">
+                    {formatMessage(msg.text)}
+                  </div>
+
+                  {/* Sources */}
+                  {msg.sources && msg.sources.length > 0 && (
+                    <div className="mt-3 pt-3 border-t border-purple-500/30">
+                      <p className="text-xs text-purple-300 mb-2">Sources:</p>
+                      <div className="flex flex-wrap gap-2">
+                        {msg.sources.map((source, idx) => (
+                          <span
+                            key={idx}
+                            className="text-xs px-2 py-1 bg-purple-500/20 rounded-full text-purple-200"
+                          >
+                            {source}
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Confidence */}
+                  {msg.confidence && (
+                    <div className="mt-2 text-xs text-purple-300">
+                      Confidence: {(msg.confidence * 100).toFixed(0)}%
+                    </div>
+                  )}
+
+                  {/* Copy button */}
+                  <button
+                    onClick={() => handleCopy(msg.text, msg.id)}
+                    className="absolute -top-2 -right-2 opacity-0 group-hover:opacity-100 transition-opacity bg-slate-700 hover:bg-slate-600 p-2 rounded-full shadow-lg"
+                    title="Copy message"
+                  >
+                    {copiedId === msg.id ? (
+                      <FaCheck className="text-green-400 text-xs" />
+                    ) : (
+                      <FaCopy className="text-gray-300 text-xs" />
+                    )}
+                  </button>
+                </div>
+
+                {/* Timestamp */}
+                <span className="text-xs text-gray-500 px-2">
+                  {msg.timestamp.toLocaleTimeString([], {
+                    hour: "2-digit",
+                    minute: "2-digit",
+                  })}
+                </span>
+              </div>
+            </div>
+          ))}
+
+          {/* Typing Indicator */}
+          {typing && (
+            <div className="flex gap-3">
+              <div className="flex-shrink-0 w-10 h-10 rounded-full bg-gradient-to-br from-blue-500 to-cyan-500 flex items-center justify-center">
+                <FaRobot className="text-white text-sm" />
+              </div>
+              <div className="bg-gradient-to-br from-slate-800 to-slate-900 border border-purple-500/20 px-5 py-3 rounded-2xl rounded-tl-sm">
+                <div className="flex gap-2">
+                  <div className="w-2 h-2 bg-purple-400 rounded-full animate-bounce"></div>
+                  <div
+                    className="w-2 h-2 bg-purple-400 rounded-full animate-bounce"
+                    style={{ animationDelay: "0.2s" }}
+                  ></div>
+                  <div
+                    className="w-2 h-2 bg-purple-400 rounded-full animate-bounce"
+                    style={{ animationDelay: "0.4s" }}
+                  ></div>
+                </div>
+              </div>
+            </div>
+          )}
+
+          <div ref={messagesEndRef} />
+        </div>
+      </main>
+
+      {/* Input Footer */}
+      <footer className="bg-black/30 backdrop-blur-xl border-t border-purple-500/20 shadow-lg">
+        <div className="max-w-4xl mx-auto px-4 py-4">
+          <form onSubmit={handleSend} className="flex gap-3">
+            <input
+              type="text"
+              placeholder="Type your message here..."
+              value={input}
+              onChange={(e) => setInput(e.target.value)}
+              className="flex-1 bg-slate-800/50 border border-purple-500/30 rounded-xl px-5 py-3 text-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-purple-500 focus:border-transparent transition-all"
+              disabled={typing}
+            />
+            <button
+              type="submit"
+              disabled={!input.trim() || typing}
+              className="px-6 py-3 bg-gradient-to-r from-purple-600 to-pink-600 hover:from-purple-700 hover:to-pink-700 text-white rounded-xl font-semibold transition-all hover:scale-105 disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:scale-100 shadow-lg shadow-purple-500/25"
+            >
+              <FaPaperPlane className="text-lg" />
+            </button>
+          </form>
+
+          <p className="text-center text-xs text-gray-500 mt-3">
+            Powered by{" "}
+            <a
+              href="https://backend-chatbot-bc8w.onrender.com"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-purple-400 hover:text-purple-300 transition-colors"
+            >
+              AI Backend
+            </a>{" "}
+            • Uses Wikipedia, arXiv, PubMed & more
+          </p>
+        </div>
+      </footer>
     </div>
   );
 }
