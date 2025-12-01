@@ -16,14 +16,32 @@ function Chat() {
     {
       id: 1,
       sender: "bot",
-      text: "Hello! I'm your AI assistant powered by semantic search and advanced NLP. Ask me anything!",
+      text: "Hello! I'm your AI assistant powered by semantic search and advanced NLP.\n\n⚠️ First request may take 30-60 seconds as the server loads AI models.\n\nAsk me anything about programming, science, or general knowledge!",
       timestamp: new Date(),
     },
   ]);
   const [input, setInput] = useState("");
   const [typing, setTyping] = useState(false);
   const [copiedId, setCopiedId] = useState(null);
+  const [connectionStatus, setConnectionStatus] = useState("checking"); // checking, online, offline
   const messagesEndRef = useRef(null);
+
+  // Check backend connection on mount
+  useEffect(() => {
+    const checkBackend = async () => {
+      try {
+        const response = await fetch(`${BACKEND_URL}/`, { method: "GET" });
+        if (response.ok) {
+          setConnectionStatus("online");
+        } else {
+          setConnectionStatus("offline");
+        }
+      } catch (err) {
+        setConnectionStatus("offline");
+      }
+    };
+    checkBackend();
+  }, []);
 
   // Auto-scroll to bottom
   useEffect(() => {
@@ -47,11 +65,22 @@ function Chat() {
     setTyping(true);
 
     try {
+      // Increase timeout to 60 seconds for cold start
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 60000);
+
       const response = await fetch(`${BACKEND_URL}/chat`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ message: userMessage.text }),
+        signal: controller.signal,
       });
+
+      clearTimeout(timeoutId);
+
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
+      }
 
       const data = await response.json();
       const botText = data.response || data.reply || "I couldn't process that request.";
@@ -72,10 +101,18 @@ function Chat() {
       console.error("Error:", err);
       setTyping(false);
       
+      let errorText = "Sorry, I'm having trouble connecting to the server. Please try again.";
+      
+      if (err.name === 'AbortError') {
+        errorText = "The request took too long. The server might be starting up (this can take 30-60 seconds on first request). Please try again.";
+      } else if (err.message.includes('Failed to fetch')) {
+        errorText = "Cannot connect to the backend server. Please check if the backend is running at: " + BACKEND_URL;
+      }
+      
       const errorMessage = {
         id: Date.now() + 1,
         sender: "bot",
-        text: "Sorry, I'm having trouble connecting to the server. Please try again.",
+        text: errorText,
         timestamp: new Date(),
       };
       
@@ -147,11 +184,22 @@ function Chat() {
           <div className="flex items-center gap-3">
             <div className="relative">
               <FaRobot className="text-4xl text-purple-400" />
-              <div className="absolute -bottom-1 -right-1 w-3 h-3 bg-green-400 rounded-full border-2 border-slate-900 animate-pulse"></div>
+              <div className={`absolute -bottom-1 -right-1 w-3 h-3 rounded-full border-2 border-slate-900 ${
+                connectionStatus === "online" ? "bg-green-400 animate-pulse" :
+                connectionStatus === "offline" ? "bg-red-400" :
+                "bg-yellow-400 animate-pulse"
+              }`} title={
+                connectionStatus === "online" ? "Backend Online" :
+                connectionStatus === "offline" ? "Backend Offline" :
+                "Checking Connection..."
+              }></div>
             </div>
             <div>
               <h1 className="text-2xl font-bold text-white">AI Assistant</h1>
-              <p className="text-xs text-purple-300">Powered by Semantic Search & NLP</p>
+              <p className="text-xs text-purple-300">
+                Powered by Semantic Search & NLP
+                {connectionStatus === "offline" && " • Backend Offline"}
+              </p>
             </div>
           </div>
 
@@ -276,16 +324,21 @@ function Chat() {
                 <FaRobot className="text-white text-sm" />
               </div>
               <div className="bg-gradient-to-br from-slate-800 to-slate-900 border border-purple-500/20 px-5 py-3 rounded-2xl rounded-tl-sm">
-                <div className="flex gap-2">
-                  <div className="w-2 h-2 bg-purple-400 rounded-full animate-bounce"></div>
-                  <div
-                    className="w-2 h-2 bg-purple-400 rounded-full animate-bounce"
-                    style={{ animationDelay: "0.2s" }}
-                  ></div>
-                  <div
-                    className="w-2 h-2 bg-purple-400 rounded-full animate-bounce"
-                    style={{ animationDelay: "0.4s" }}
-                  ></div>
+                <div className="flex flex-col gap-2">
+                  <div className="flex gap-2">
+                    <div className="w-2 h-2 bg-purple-400 rounded-full animate-bounce"></div>
+                    <div
+                      className="w-2 h-2 bg-purple-400 rounded-full animate-bounce"
+                      style={{ animationDelay: "0.2s" }}
+                    ></div>
+                    <div
+                      className="w-2 h-2 bg-purple-400 rounded-full animate-bounce"
+                      style={{ animationDelay: "0.4s" }}
+                    ></div>
+                  </div>
+                  <p className="text-xs text-gray-400 mt-1">
+                    Processing your request... This may take up to 60 seconds on first use.
+                  </p>
                 </div>
               </div>
             </div>
